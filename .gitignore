@@ -1,0 +1,31 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+*.class
+*.log
+
+# Minecraft / Fabric generated files
+run/
+fabric-example-mod/
+*.jar
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Secrets / local configs
+local.properties
+gradle.properties
+
+# Node / frontend if using for devtools
+node_modules/
+dist/

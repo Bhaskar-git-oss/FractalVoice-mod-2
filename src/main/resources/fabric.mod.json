@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "fractal_voice_mod",
+  "version": "1.0.0",
+  "name": "FractalVoice",
+  "description": "Sends proximity info to Discord bot",
+  "authors": ["Fractal42O"],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/proximitymod/FractalVoice_icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "client": [
+      "com.example.proximitymod.ProximityMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.6",
+    "fabric": "*",
+    "minecraft": "1.21.4"
+  }
+}
