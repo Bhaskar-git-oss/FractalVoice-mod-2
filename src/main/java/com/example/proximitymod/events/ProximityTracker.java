@@ -4,15 +4,28 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientEntityEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.player.PlayerEntity;
 
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class ProximityTracker {
 
+    private static final String WORKER_URL = "https://fractalvoiceworker.fractalvoice.workers.dev/";
+
+    // max 1 request per 300ms
+    private static final long SEND_DELAY = 300;
+    private static long lastSend = 0;
+
+    private static final Queue<String> queue = new ConcurrentLinkedQueue<>();
+
     public static void register() {
 
-        // ENTER
+        // start sender thread
+        startSender();
+
         ClientEntityEvents.ENTITY_LOAD.register((entity, world) -> {
             if (!(entity instanceof PlayerEntity player)) return;
 
@@ -20,16 +33,13 @@ public class ProximityTracker {
             if (client.player == null) return;
             if (player.getUuid().equals(client.player.getUuid())) return;
 
-            sendEvent(
-                    "visibility_add",
+            queueEvent("visibility_add",
                     client.player.getUuidAsString(),
                     player.getUuidAsString(),
                     client.player.getGameProfile().getName(),
-                    player.getGameProfile().getName()
-            );
+                    player.getGameProfile().getName());
         });
 
-        // LEAVE
         ClientEntityEvents.ENTITY_UNLOAD.register((entity, world) -> {
             if (!(entity instanceof PlayerEntity player)) return;
 
@@ -37,38 +47,58 @@ public class ProximityTracker {
             if (client.player == null) return;
             if (player.getUuid().equals(client.player.getUuid())) return;
 
-            sendEvent(
-                    "visibility_remove",
+            queueEvent("visibility_remove",
                     client.player.getUuidAsString(),
                     player.getUuidAsString(),
                     client.player.getGameProfile().getName(),
-                    player.getGameProfile().getName()
-            );
+                    player.getGameProfile().getName());
         });
     }
 
-    private static void sendEvent(String event, String playerA, String playerB, String nameA, String nameB) {
+    private static void queueEvent(String event, String a, String b, String nameA, String nameB) {
+        String json = String.format(
+                "{\"type\":\"visibility\",\"event\":\"%s\",\"playerA\":\"%s\",\"playerB\":\"%s\",\"nameA\":\"%s\",\"nameB\":\"%s\"}",
+                event, a, b, nameA, nameB
+        );
+        queue.add(json);
+    }
+
+    private static void startSender() {
         new Thread(() -> {
-            try {
-                URL url = new URL("https://discord.com/api/webhooks/1470846057595539509/sazm6NyVbgWznBmI8EsL6Vu2Bp2COBJVCAduzN7tWxqdFnYB8Ddm432DqVrCm4wNXbPy");
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            while (true) {
+                try {
+                    long now = System.currentTimeMillis();
 
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setDoOutput(true);
+                    if (!queue.isEmpty() && now - lastSend >= SEND_DELAY) {
+                        String payload = queue.poll();
+                        sendToWorker(payload);
+                        lastSend = now;
+                    }
 
-                String payload = String.format(
-                        "{ \"content\": \"{\\\"event\\\":\\\"%s\\\",\\\"playerA\\\":\\\"%s\\\",\\\"playerB\\\":\\\"%s\\\",\\\"nameA\\\":\\\"%s\\\",\\\"nameB\\\":\\\"%s\\\"}\" }",
-                        event, playerA, playerB, nameA, nameB
-                );
-
-                conn.getOutputStream().write(payload.getBytes(StandardCharsets.UTF_8));
-                conn.getInputStream();
-                conn.disconnect();
-
-            } catch (Exception e) {
-                e.printStackTrace();
+                    Thread.sleep(50);
+                } catch (Exception ignored) {}
             }
-        }, "FractalVoice-Proximity").start();
+        }, "FractalVoice-Proximity-Sender").start();
+    }
+
+    private static void sendToWorker(String payload) {
+        try {
+            URL url = new URL(WORKER_URL);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(payload.getBytes(StandardCharsets.UTF_8));
+            }
+
+            conn.getInputStream();
+            conn.disconnect();
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

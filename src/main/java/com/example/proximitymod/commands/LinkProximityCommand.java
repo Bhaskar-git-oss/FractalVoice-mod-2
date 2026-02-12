@@ -17,44 +17,39 @@ import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.lit
 
 public class LinkProximityCommand {
 
-    private static final String WEBHOOK_URL =
-            "https://discord.com/api/webhooks/1470846057595539509/sazm6NyVbgWznBmI8EsL6Vu2Bp2COBJVCAduzN7tWxqdFnYB8Ddm432DqVrCm4wNXbPy";
+    // Cloudflare Worker endpoint (NOT a Discord webhook)
+    private static final String WORKER_URL = "https://fractalvoiceworker.fractalvoice.workers.dev/";
 
-    // Cooldown map: Player UUID -> Last request timestamp (ms)
     private static final HashMap<UUID, Long> COOLDOWN_MAP = new HashMap<>();
-    private static final long COOLDOWN_MS = 30_000; // 30 seconds cooldown
+    private static final long COOLDOWN_MS = 30_000;
 
     public static void register() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
-            dispatcher.register(literal("linkproximity")
-                .executes(context -> {
-                    ClientPlayerEntity player = MinecraftClient.getInstance().player;
-                    if (player == null) return 0;
+            dispatcher.register(literal("linkproximity").executes(context -> {
+                ClientPlayerEntity player = MinecraftClient.getInstance().player;
+                if (player == null) return 0;
 
-                    UUID uuid = player.getUuid();
-                    long now = System.currentTimeMillis();
+                UUID uuid = player.getUuid();
+                long now = System.currentTimeMillis();
 
-                    // Check cooldown
-                    if (COOLDOWN_MAP.containsKey(uuid)) {
-                        long last = COOLDOWN_MAP.get(uuid);
-                        long remaining = (COOLDOWN_MS - (now - last)) / 1000;
-                        if (remaining > 0) {
-                            player.sendMessage(Text.literal("§cYou must wait §e" + remaining + "§c seconds before requesting a new code."), false);
-                            return 0;
-                        }
+                // client side cooldown
+                if (COOLDOWN_MAP.containsKey(uuid)) {
+                    long last = COOLDOWN_MAP.get(uuid);
+                    long remaining = (COOLDOWN_MS - (now - last)) / 1000;
+                    if (remaining > 0) {
+                        player.sendMessage(Text.literal("§cWait §e" + remaining + "§c seconds."), false);
+                        return 0;
                     }
+                }
 
-                    // Generate and send code
-                    String code = generateCode();
-                    player.sendMessage(Text.literal("§aYour link code: §e" + code), false);
+                String code = generateCode();
+                player.sendMessage(Text.literal("§aYour link code: §e" + code), false);
 
-                    sendWebhook(code, uuid.toString(), player.getName().getString());
+                sendToWorker(code, uuid.toString(), player.getName().getString());
 
-                    // Update cooldown
-                    COOLDOWN_MAP.put(uuid, now);
-                    return 1;
-                })
-            );
+                COOLDOWN_MAP.put(uuid, now);
+                return 1;
+            }));
         });
     }
 
@@ -62,48 +57,45 @@ public class LinkProximityCommand {
         return Integer.toString(10000 + (int) (Math.random() * 90000));
     }
 
-    private static void sendWebhook(String code, String uuid, String username) {
+    private static void sendToWorker(String code, String uuid, String username) {
         new Thread(() -> {
             try {
-                URL url = new URL(WEBHOOK_URL);
+                URL url = new URL(WORKER_URL);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
                 conn.setRequestMethod("POST");
-                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
                 conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
 
-                // ✅ VALID JSON
                 String json = String.format(
-                        "{ \"username\": \"FractalVoice\", " +
-                        "\"content\": \"**New Proximity Link Created**\\nPlayer: %s\\nUUID: %s\\nCode: %s\" }",
-                        username, uuid, code
+                        "{\"type\":\"link_request\",\"uuid\":\"%s\",\"name\":\"%s\",\"code\":\"%s\"}",
+                        uuid, username, code
                 );
 
-                byte[] data = json.getBytes(StandardCharsets.UTF_8);
-                conn.setFixedLengthStreamingMode(data.length);
-                conn.connect();
-
                 try (OutputStream os = conn.getOutputStream()) {
-                    os.write(data);
-                    os.flush();
+                    os.write(json.getBytes(StandardCharsets.UTF_8));
                 }
 
                 int response = conn.getResponseCode();
 
-                if (response != 204 && response != 200) {
-                    System.err.println("Webhook failed, response code: " + response);
+                if (response != 200) {
+                    System.err.println("Worker returned HTTP " + response);
                     InputStream err = conn.getErrorStream();
                     if (err != null) {
                         System.err.println(new String(err.readAllBytes(), StandardCharsets.UTF_8));
                     }
                 } else {
-                    System.out.println("Webhook sent successfully.");
+                    System.out.println("Link request sent to Worker.");
                 }
 
                 conn.disconnect();
+
             } catch (Exception e) {
+                System.err.println("Failed to contact Worker:");
                 e.printStackTrace();
             }
-        }, "FractalVoice-Webhook").start();
+        }, "FractalVoice-Link").start();
     }
 }
