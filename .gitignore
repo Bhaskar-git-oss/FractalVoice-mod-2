@@ -2,6 +2,7 @@
 .gradle/
 build/
 out/
+versions/
 
 # IDEs
 .idea/

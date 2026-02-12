@@ -6,17 +6,68 @@ plugins {
 group = 'com.example'
 version = '1.0.0'
 
+/*
+ * Multi-version coordinates map.
+ * Update mappings / fabricApiDep values here if you want to add/change supported MC versions.
+ */
+ext {
+    multiversionMap = [
+        "1.21":   [ mappings: "net.fabricmc:yarn:1.21+build.9",     fabricApiDep: "net.fabricmc.fabric-api:fabric-api:0.102.0+1.21" ],
+        "1.21.1": [ mappings: "net.fabricmc:yarn:1.21.1+build.3:v2", fabricApiDep: "net.fabricmc.fabric-api:fabric-api:0.116.8+1.21.1" ],
+        "1.21.2": [ mappings: "net.fabricmc:yarn:1.21.2+build.1",    fabricApiDep: "net.fabricmc.fabric-api:fabric-api:0.106.1+1.21.2" ],
+        "1.21.3": [ mappings: "net.fabricmc:yarn:1.21.3+build.2",    fabricApiDep: "net.fabricmc.fabric-api:fabric-api:0.114.1+1.21.3" ],
+        "1.21.4": [ mappings: "net.fabricmc:yarn:1.21.4+build.8:v2", fabricApiDep: "net.fabricmc.fabric-api:fabric-api:0.119.4+1.21.4" ],
+        "1.21.5": [ mappings: "net.fabricmc:yarn:1.21.5+build.1:v2", fabricApiDep: "net.fabricmc.fabric-api:fabric-api:0.128.2+1.21.5" ],
+        "1.21.6": [ mappings: "net.fabricmc:yarn:1.21.6+build.1",    fabricApiDep: "net.fabricmc.fabric-api:fabric-api:0.128.2+1.21.6" ],
+        "1.21.7": [ mappings: "net.fabricmc:yarn:1.21.7+build.8:v2", fabricApiDep: "net.fabricmc.fabric-api:fabric-api:0.129.0+1.21.7" ],
+        "1.21.8": [ mappings: "net.fabricmc:yarn:1.21.8+build.1",    fabricApiDep: "net.fabricmc.fabric-api:fabric-api:0.136.1+1.21.8" ],
+    ]
+}
+
+// --------------------
+// Choose MC version + mappings + fabricApiDep
+// - You may pass -PmcVersion, -Pmappings, -PfabricApiDep to override
+// - If mappings/fabricApiDep are not passed they are selected from multiversionMap
+// --------------------
+def mcVersionProp = project.hasProperty('mcVersion') ? project.property('mcVersion') : '1.21.4'
+
+def resolvedMappingsProp = null
+def resolvedFabricApiDepProp = null
+
+// If user provided explicit mappings/fabricApiDep use them
+if (project.hasProperty('mappings')) {
+    resolvedMappingsProp = project.property('mappings')
+}
+if (project.hasProperty('fabricApiDep')) {
+    resolvedFabricApiDepProp = project.property('fabricApiDep')
+}
+
+// Otherwise, try to pick from multiversionMap
+def coords = multiversionMap.get(mcVersionProp)
+if (coords != null) {
+    if (resolvedMappingsProp == null) resolvedMappingsProp = coords.mappings
+    if (resolvedFabricApiDepProp == null) resolvedFabricApiDepProp = coords.fabricApiDep
+} else {
+    // not found - fallback to sensible defaults if user didn't provide them
+    if (resolvedMappingsProp == null) resolvedMappingsProp = "net.fabricmc:yarn:${mcVersionProp}+build.2:v2"
+    if (resolvedFabricApiDepProp == null) resolvedFabricApiDepProp = "net.fabricmc.fabric-api:fabric-api:0.119.4+${mcVersionProp}"
+    logger.warn("Warning: mcVersion ${mcVersionProp} not found in multiversionMap; using fallback coordinates. You can override with -Pmappings and -PfabricApiDep.")
+}
+
+println "Building for MC version: ${mcVersionProp}"
+println "Using mappings: ${resolvedMappingsProp}"
+println "Using Fabric API dep: ${resolvedFabricApiDepProp}"
+
 repositories {
     mavenCentral()
     maven { url = 'https://maven.fabricmc.net/' }
 }
 
 dependencies {
-    minecraft "com.mojang:minecraft:1.21.4"
-    mappings "net.fabricmc:yarn:1.21.4+build.2:v2"
+    minecraft "com.mojang:minecraft:${mcVersionProp}"
+    mappings "${resolvedMappingsProp}"
     modImplementation "net.fabricmc:fabric-loader:0.15.6"
-    // Correct Fabric API version for 1.21.4
-    modImplementation "net.fabricmc.fabric-api:fabric-api:0.119.4+1.21.4"
+    modImplementation "${resolvedFabricApiDepProp}"
 }
 
 java {
@@ -29,4 +80,82 @@ java {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+}
+
+// Embed MC version into jar filename
+def mcVersionForArtifact = mcVersionProp
+version = "${project.version}-${mcVersionForArtifact}"
+
+tasks.jar {
+    archiveBaseName.set('fractal-voice')
+    archiveClassifier.set(mcVersionForArtifact)
+}
+
+// --------------------
+// Helper task: build all configured versions
+// --------------------
+task buildAllVersions {
+    group = "multiversion"
+    description = "Builds this mod for each MC version defined in multiversionMap."
+
+    doLast {
+        def isWindows = System.getProperty("os.name").toLowerCase().contains("windows")
+        def wrapper = isWindows ? "gradlew.bat" : "./gradlew"
+
+        multiversionMap.each { ver, coordsMap ->
+            println "=== Building for Minecraft ${ver} ==="
+
+            def cmd = [
+                    wrapper,
+                    "clean",
+                    "build",
+                    "-PmcVersion=${ver}",
+                    "-Pmappings=${coordsMap.mappings}",
+                    "-PfabricApiDep=${coordsMap.fabricApiDep}"
+            ]
+
+            println "Running: ${cmd.join(' ')}"
+
+            def process = new ProcessBuilder(cmd as String[])
+                    .directory(project.projectDir)
+                    .inheritIO()
+                    .start()
+
+            def exitCode = process.waitFor()
+
+            if (exitCode != 0) {
+                throw new GradleException("Build failed for Minecraft ${ver} with exit code ${exitCode}")
+            }
+
+            println "Build finished for ${ver}"
+
+            // --------------------------
+            // MOVE RESULT JAR(S) INTO versions/<ver>/
+            // --------------------------
+            def libsDir = new File(project.projectDir, "build/libs")
+            def outDir = new File(project.projectDir, "versions/${ver}")
+            outDir.mkdirs()
+
+            libsDir.listFiles()
+                    .findAll { it.name.endsWith(".jar") }
+                    .each { file ->
+                        def target = new File(outDir, file.name)
+                        // prefer move, but if target exists, overwrite by copy+delete
+                        if (file.renameTo(target)) {
+                            println "Moved ${file.name} -> versions/${ver}/"
+                        } else {
+                            println "Rename failed, copying ${file.name} -> versions/${ver}/"
+                            file.withInputStream { ins ->
+                                target.withOutputStream { outs -> outs << ins }
+                            }
+                            file.delete()
+                        }
+                    }
+
+            println "=== Stored build for ${ver} ==="
+        }
+
+        println ""
+        println "=== All versions built successfully! ==="
+    }
 }
