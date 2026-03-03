@@ -1,3 +1,6 @@
+# NOTE
+- If you guys want it, inform me. I currently have no motivation to revive this project.
+
 # FractalVoice
 
 **FractalVoice** is a Minecraft mod that integrates with a Discord bot to manage voice channels dynamically based on in-game proximity. Players are automatically moved to the correct Discord voice channel when they see each other in-game — all without exposing coordinates.
